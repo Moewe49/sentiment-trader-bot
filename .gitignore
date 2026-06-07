@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+*.log
+
+# Lokale Claude-Settings (enthalten ggf. Pfade/Permissions)
+.claude/settings.local.json
+
+# Versehentliche Junk-Datei
+/-w

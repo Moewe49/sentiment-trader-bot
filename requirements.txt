@@ -1,0 +1,16 @@
+feedparser==6.0.12
+psycopg2-binary==2.9.10
+transformers==4.46.3
+ib_async==2.1.0
+# Aktuelles yfinance: nutzt curl_cffi automatisch (Browser-Tarnung) → deutlich
+# weniger "Too Many Requests". Nicht pinnen, da Yahoo-Änderungen alte Versionen
+# regelmäßig brechen.
+yfinance>=0.2.61
+curl_cffi>=0.7
+pandas==2.2.3
+# scikit-learn fürs ML-Ranking (HistGradientBoosting – CPU, schnell, NaN-fähig)
+scikit-learn>=1.3
+# Gemini (Google AI Studio) für optionales qualitatives Deep-Dive-Research
+google-genai>=1.0
+# tzdata (fuer zoneinfo / US-Boersenzeit) wird von ib_async mitgeliefert
+# (ib_async verlangt tzdata>=2025.2) - daher hier NICHT separat pinnen.

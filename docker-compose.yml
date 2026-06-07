@@ -1,0 +1,135 @@
+services:
+
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: st_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - st_pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: st_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - st_redisdata:/data
+
+  # IB Gateway mit automatischem Login (IBC). Loggt sich beim Start selbst ein,
+  # damit der Bot ohne manuelles Zutun handeln kann. API für Paper-Trading liegt
+  # im Docker-Netz unter ib-gateway:4004.
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: st_ibgateway
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TWS_USERID: ${TWS_USERID}
+      TWS_PASSWORD: ${TWS_PASSWORD}
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      READ_ONLY_API: ${READ_ONLY_API:-no}
+      TWOFA_TIMEOUT_ACTION: restart
+      TIME_ZONE: Europe/Berlin
+      VNC_SERVER_PASSWORD: ${VNC_SERVER_PASSWORD:-}
+    ports:
+      - "127.0.0.1:4002:4004"   # Paper-API (nur lokaler Host-Zugriff)
+      - "127.0.0.1:5900:5900"   # VNC: zum Reinschauen, falls VNC_SERVER_PASSWORD gesetzt
+
+  rss:
+    build: .
+    container_name: st_rss
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python -u -m src.rss_aggregator
+
+  sentiment:
+    build: .
+    container_name: st_sentiment
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python -u -m src.sentiment_worker
+    volumes:
+      - st_hfcache:/root/.cache/huggingface
+
+  executor:
+    build: .
+    container_name: st_executor
+    restart: unless-stopped
+    depends_on:
+      - ib-gateway
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python -u -m src.executor
+
+  signal:
+    build: .
+    container_name: st_signal
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      ib-gateway:
+        condition: service_started
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python -u -m src.signal_engine
+
+  # Bewertet im Nachhinein, ob die erzeugten Signale richtig lagen
+  # (Forward-Returns 1d/5d). Liefert die Datengrundlage fürs Lernen.
+  evaluator:
+    build: .
+    container_name: st_evaluator
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python -u -m src.evaluator
+
+  dashboard:
+    build: .
+    container_name: st_dashboard
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      ib-gateway:
+        condition: service_started
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8080:8080"
+    command: python -u -m src.dashboard
+
+volumes:
+  st_pgdata:
+  st_redisdata:
+  st_hfcache:
