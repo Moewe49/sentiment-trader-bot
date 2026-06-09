@@ -19,7 +19,8 @@ import pandas as pd
 from ..db import (get_connection, fetch_prices_history, ensure_shadow_tables,
                   upsert_shadow_portfolio, latest_shadow_portfolio,
                   upsert_shadow_equity, latest_shadow_equity,
-                  fetch_shadow_equity, count_shadow_rebalances)
+                  fetch_shadow_equity, count_shadow_rebalances, fetch_watchlist)
+from ..settings import load_settings
 from ..universe import RESEARCH_UNIVERSE
 
 logging.basicConfig(level=logging.INFO,
@@ -31,10 +32,26 @@ REBAL_DAYS = 21          # monatliches Rebalancing (Handelstage)
 MOM_FEATURES = ["r_63", "r_126", "r_252", "mom_12_1"]
 
 
-def _load_wide(conn, lookback_days: int = 600) -> pd.DataFrame:
+def core_universe(conn) -> list:
+    """Universum des Kerns: festes Research-Universum PLUS die vom Nutzer im
+    Dashboard hinzugefügten US-Werte (Watchlist). Eigene Aktien konkurrieren
+    damit im Momentum-Ranking um einen Platz im Portfolio – gekauft wird nur,
+    was in den Top-Rang kommt. Nur US-Symbole (Kern handelt in USD)."""
+    base = set(RESEARCH_UNIVERSE)
+    try:
+        for t in fetch_watchlist(conn):
+            if t and "." not in t:
+                base.add(t)
+    except Exception:
+        pass
+    return sorted(base)
+
+
+def _load_wide(conn, lookback_days: int = 600, tickers=None) -> pd.DataFrame:
     """Wide-Close-DataFrame (Index=day, Spalten=ticker) der letzten Tage."""
     start = (date.today() - timedelta(days=lookback_days)).isoformat()
-    hist = fetch_prices_history(conn, tickers=RESEARCH_UNIVERSE, start=start)
+    hist = fetch_prices_history(conn, tickers=tickers or RESEARCH_UNIVERSE,
+                                start=start)
     if not hist:
         return pd.DataFrame()
     df = pd.DataFrame(hist)
@@ -51,7 +68,10 @@ def compute_target(wide: pd.DataFrame, top_q: float = TOP_Q):
     feat["r_252"] = wide.pct_change(252).iloc[-1]
     feat["mom_12_1"] = (wide.shift(21) / wide.shift(252) - 1.0).iloc[-1]
     ranks = feat.rank(pct=True)                 # Querschnitts-Perzentil je Feature
-    blend = ranks.mean(axis=1).dropna()
+    # Mindestens 2 Momentum-Fenster nötig (schützt vor frischen IPOs/Watchlist-
+    # Werten mit zu kurzer Historie, die sonst auf einem Fenster ranken würden)
+    valid = ranks.count(axis=1) >= 2
+    blend = ranks[valid].mean(axis=1).dropna()
     k = max(1, int(round(len(blend) * top_q)))
     picks = blend.sort_values(ascending=False).head(k).index.tolist()
 
@@ -64,11 +84,17 @@ def compute_target(wide: pd.DataFrame, top_q: float = TOP_Q):
     return day, regime_on, picks, blend.sort_values(ascending=False)
 
 
-def update_shadow(conn, top_q: float = TOP_Q, rebal_days: int = REBAL_DAYS):
+def update_shadow(conn, top_q: float = None, rebal_days: int = REBAL_DAYS):
     """Ein Update-Schritt: ggf. neu rebalancieren + Equity bis zum jüngsten Tag
-    fortschreiben. Idempotent (mehrfacher Aufruf am selben Tag schadet nicht)."""
+    fortschreiben. Idempotent (mehrfacher Aufruf am selben Tag schadet nicht).
+    top_q kommt aus den Live-Settings (Dashboard ⚙), Fallback TOP_Q."""
     ensure_shadow_tables(conn)
-    wide = _load_wide(conn)
+    if top_q is None:
+        try:
+            top_q = float(load_settings(conn).get("SYST_TOP_PCT") or TOP_Q)
+        except Exception:
+            top_q = TOP_Q
+    wide = _load_wide(conn, tickers=core_universe(conn))
     if wide.empty or len(wide) < 260:
         log.warning("Shadow: zu wenig Kurshistorie (%d Tage) – übersprungen.",
                     0 if wide.empty else len(wide))

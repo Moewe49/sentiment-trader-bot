@@ -1279,8 +1279,10 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     <div class="grid2">
     <section>
       <h1>Eigene Werte handeln</h1>
-      <div class="stamp">Kürzel eingeben – US ohne Suffix (NVDA), Ausland mit
-        Börsen-Suffix wie bei Yahoo: z.&nbsp;B. SIVE.ST, SAP.DE, SHEL.L.</div>
+      <div class="stamp">Kürzel eingeben – US ohne Suffix (z.&nbsp;B. NVDA).
+        US-Werte fließen automatisch in den Momentum-Pool des systematischen
+        Kerns ein: gekauft wird nur, was im Ranking die Top-Plätze erreicht –
+        das Modell entscheidet, nicht die Reihenfolge der Eingabe.</div>
       <form class="addform" method="post" action="/watchlist/add">
         <input name="ticker" placeholder="z. B. SIVE.ST" maxlength="12"
                autocomplete="off" spellcheck="false">

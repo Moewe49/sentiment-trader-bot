@@ -22,7 +22,28 @@ from ..db import get_connection
 from ..settings import load_settings
 from ..markets import is_open
 from ..signal_engine import (fetch_prices, fetch_fx, _account_equity_and_cash)
-from .shadow import _load_wide, compute_target, TOP_Q
+from .shadow import _load_wide, compute_target, core_universe, TOP_Q
+
+# Postgres-Advisory-Lock: verhindert, dass zwei Rebalances (Engine + CLI)
+# gleichzeitig laufen – das war die Ursache des WFC-Doppelverkaufs/Shorts.
+_LOCK_KEY = 815001
+
+
+def _try_lock(conn) -> bool:
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (_LOCK_KEY,))
+            return bool(cur.fetchone()[0])
+    except Exception:
+        return True            # ohne DB-Lock lieber handeln als blockieren
+
+
+def _unlock(conn):
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s)", (_LOCK_KEY,))
+    except Exception:
+        pass
 
 # Referenz-US-Symbol für die "Börse offen?"-Prüfung (Universum ist US).
 _US_REF = "NVDA"
@@ -109,12 +130,14 @@ def _eurusd_from_ib(executor: IBKRExecutor):
     return None
 
 
-def _target_now(conn):
-    """Frisches Ziel (day, regime_on, picks) aus den aktuellsten Kursen."""
-    wide = _load_wide(conn)
+def _target_now(conn, cfg: dict = None):
+    """Frisches Ziel (day, regime_on, picks) aus den aktuellsten Kursen.
+    Universum inkl. Nutzer-Watchlist; Top-Anteil aus den Live-Settings."""
+    top_q = float((cfg or {}).get("SYST_TOP_PCT") or TOP_Q)
+    wide = _load_wide(conn, tickers=core_universe(conn))
     if wide.empty or len(wide) < 260:
         return None
-    day, regime_on, picks, _ = compute_target(wide, TOP_Q)
+    day, regime_on, picks, _ = compute_target(wide, top_q)
     return day, regime_on, picks
 
 
@@ -124,7 +147,28 @@ def rebalance(executor: IBKRExecutor, conn, cfg: dict,
     Orders zurück. `log_only=True` führt NICHTS aus (Trockenlauf).
     `require_open=True`: bei geschlossener US-Börse wird NICHT ausgeführt
     (verhindert das Einreihen von Market-Orders → Doppelfills/Shorts)."""
-    tgt = _target_now(conn)
+    # Sicherheits-Gates: Kill-Switch + Not-Halt (gelten auch für die CLI)
+    if not log_only:
+        if not cfg.get("TRADING_ENABLED", True):
+            log.warning("Kill-Switch (TRADING_ENABLED=Aus) – kein Rebalance.")
+            return []
+        if cfg.get("SYSTEMATIC_HALT"):
+            log.warning("Not-Halt aktiv (SYSTEMATIC_HALT) – kein Rebalance. "
+                        "Im ⚙ lösbar; löst sich auch selbst bei Erholung.")
+            return []
+        if not _try_lock(conn):
+            log.warning("Anderes Rebalancing läuft bereits (Lock) – übersprungen.")
+            return []
+    try:
+        return _rebalance_inner(executor, conn, cfg, log_only, require_open)
+    finally:
+        if not log_only:
+            _unlock(conn)
+
+
+def _rebalance_inner(executor: IBKRExecutor, conn, cfg: dict,
+                     log_only: bool, require_open: bool) -> list:
+    tgt = _target_now(conn, cfg)
     if not tgt:
         log.warning("Kein Ziel berechenbar (zu wenig Kurshistorie).")
         return []
