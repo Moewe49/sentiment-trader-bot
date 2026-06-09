@@ -482,6 +482,16 @@ def fetch_prices_history(conn, tickers: list[str] = None,
         return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
+def equity_peak(conn, days: int = 30):
+    """Höchster Kontowert der letzten `days` Tage (für die Drawdown-Bremse).
+    None, wenn noch keine Equity-Punkte vorliegen."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT MAX(net_liq) FROM equity_curve "
+                    "WHERE ts >= now() - make_interval(days => %s)", (days,))
+        r = cur.fetchone()
+    return float(r[0]) if r and r[0] else None
+
+
 def prices_daily_coverage(conn):
     """Übersicht: je Ticker (Anzahl Tage, erster, letzter Tag) – zum Prüfen
     des Backfills."""

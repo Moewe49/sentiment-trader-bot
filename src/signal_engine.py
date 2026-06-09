@@ -606,6 +606,13 @@ def run_cycle(conn, executor: IBKRExecutor):
                 log.info("  Initial-Deploy abgeschlossen – Flag zurückgesetzt.")
             except Exception as e:
                 log.error("  Initial-Deploy fehlgeschlagen: %s", e)
+        # Tiefes Risikomanagement: Drawdown-Bremse + tägliches Regime +
+        # automatischer Wiedereinstieg (greift nur im Ausnahmefall ein).
+        try:
+            from .research.guard import daily_guard
+            daily_guard(conn, executor, cfg)
+        except Exception as e:
+            log.error("  Risk-Guard fehlgeschlagen: %s", e)
     else:
         if actionable:
             execute_signals(signals, executor, cfg)
@@ -672,8 +679,18 @@ def main():
             try:
                 from .research.ingest import ingest as _ingest
                 from .universe import RESEARCH_UNIVERSE as _RU, MACRO_TICKERS as _MT
-                n = _ingest(conn, _RU + _MT, period="10d")
+                from .db import fetch_watchlist, prices_daily_coverage
+                # Nutzer-Watchlist (US-Werte) gehört zum Kern-Pool → Kurse mitführen
+                wl = [t for t in fetch_watchlist(conn) if t and "." not in t]
+                n = _ingest(conn, sorted(set(_RU + _MT + wl)), period="10d")
                 log.info("prices_daily aktualisiert: %d Zeilen.", n)
+                # Neue Watchlist-Werte ohne Historie: einmalig 2 Jahre backfillen,
+                # damit sie im Momentum-Ranking bewertbar sind
+                cov = {t: c for t, c, _lo, _hi in prices_daily_coverage(conn)}
+                fresh = [t for t in wl if cov.get(t, 0) < 140]
+                if fresh:
+                    log.info("Backfill für neue Watchlist-Werte: %s", fresh)
+                    _ingest(conn, fresh, period="2y")
             except Exception as e:
                 log.warning("Kurs-Update (prices_daily) fehlgeschlagen: %s", e)
             # Shadow-Modus: systematischen Kern fortschreiben (ohne Handel).

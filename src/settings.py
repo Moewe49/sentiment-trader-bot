@@ -46,6 +46,17 @@ SCHEMA: dict = {
     # Einmal-Schalter: beim nächsten US-Open EINMAL aufs Ziel umschichten
     # (live, mit korrektem Cash-Sequencing). Setzt sich danach selbst zurück.
     "SYSTEMATIC_DEPLOY":  ("Initial-Deploy beim nächsten Open", "bool", False),
+    # Konzentration des Kerns: Top-Anteil der Momentum-Rangliste, der gekauft
+    # wird. 20% ≈ 12 Werte (ausgewogen), 15% ≈ 9 Werte (aggressiver, validiert).
+    # Greift ab dem nächsten Rebalancing.
+    "SYST_TOP_PCT":       ("Kern: Top-Anteil (Momentum)",  "pct", 0.20),
+    # Tiefes Risikomanagement (Guard, läuft jeden Zyklus):
+    # Drawdown-Bremse: fällt der Kontowert so weit unter sein 30-Tage-Hoch,
+    # wird ALLES verkauft und der Not-Halt gesetzt.
+    "CORE_DD_LIMIT":      ("Kern: Drawdown-Bremse",        "pct", 0.12),
+    # Not-Halt: blockiert jeden Kauf des Kerns. Wird von der Drawdown-Bremse
+    # gesetzt; löst sich selbst, wenn Regime wieder OK und Drawdown abgebaut.
+    "SYSTEMATIC_HALT":    ("Kern: Not-Halt aktiv",         "bool", False),
 }
 
 
